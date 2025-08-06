@@ -74,7 +74,7 @@ export default class VSCEnvironment implements IEnvironment {
       } else {
         folder = workspace.workspaceFolders[0];
       }
-      location = resolve(folder.uri.fsPath, location ?? '');
+      location = resolve(folder.uri.fsPath, location ?? "");
     }
 
     await ensureDir(location);
@@ -118,12 +118,15 @@ export default class VSCEnvironment implements IEnvironment {
 
   public disableProductStyleUrl(): boolean {
     return (
-      this.workspaceConfiguration.get<boolean>("disableProductStyleUrl") || false
+      this.workspaceConfiguration.get<boolean>("disableProductStyleUrl") ||
+      false
     );
   }
 
   public inMemoryPersistence(): boolean {
-    return this.workspaceConfiguration.get<boolean>("inMemoryPersistence") || false;
+    return (
+      this.workspaceConfiguration.get<boolean>("inMemoryPersistence") || false
+    );
   }
 
   public extentMemoryLimit(): number | undefined {
@@ -134,5 +137,9 @@ export default class VSCEnvironment implements IEnvironment {
     return (
       this.workspaceConfiguration.get<boolean>("disableTelemetry") || false
     );
+  }
+
+  public blobVersioning(): boolean | undefined {
+    return this.workspaceConfiguration.get<boolean>("blobVersioning");
   }
 }

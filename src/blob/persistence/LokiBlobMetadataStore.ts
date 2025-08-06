@@ -65,7 +65,12 @@ import IBlobMetadataStore, {
 import PageWithDelimiter from "./PageWithDelimiter";
 import FilterBlobPage from "./FilterBlobPage";
 import { generateQueryBlobWithTagsWhereFunction } from "./QueryInterpreter/QueryInterpreter";
-import { getBlobTagsCount, getTagsFromString, toBlobTags } from "../utils/utils";
+import {
+  getBlobTagsCount,
+  getTagsFromString,
+  toBlobTags
+} from "../utils/utils";
+import { AccountModel } from "../AccountModel";
 
 /**
  * This is a metadata source implementation for blob based on loki DB.
@@ -95,12 +100,18 @@ import { getBlobTagsCount, getTagsFromString, toBlobTags } from "../utils/utils"
  * @class LokiBlobMetadataStore
  */
 export default class LokiBlobMetadataStore
-  implements IBlobMetadataStore, IGCExtentProvider {
+  implements IBlobMetadataStore, IGCExtentProvider
+{
   private readonly db: Loki;
 
   private initialized: boolean = false;
   private closed: boolean = true;
 
+  private readonly isBlobVersioningEnabledFromConfig: boolean | undefined;
+
+  private accountModel: AccountModel | undefined;
+
+  private readonly ACCOUNT_MODEL_COLLECTION = "$ACCOUNT_MODEL_COLLECTION$";
   private readonly SERVICES_COLLECTION = "$SERVICES_COLLECTION$";
   private readonly CONTAINERS_COLLECTION = "$CONTAINERS_COLLECTION$";
   private readonly BLOBS_COLLECTION = "$BLOBS_COLLECTION$";
@@ -108,14 +119,24 @@ export default class LokiBlobMetadataStore
 
   private readonly pageBlobRangesManager = new PageBlobRangesManager();
 
-  public constructor(public readonly lokiDBPath: string, inMemory: boolean) {
-    this.db = new Loki(lokiDBPath, inMemory ? {
-      persistenceMethod: "memory"
-    } : {
-      persistenceMethod: "fs",
-      autosave: true,
-      autosaveInterval: 5000
-    });
+  public constructor(
+    public readonly lokiDBPath: string,
+    inMemory: boolean,
+    isBlobVersioningEnabled?: boolean
+  ) {
+    this.isBlobVersioningEnabledFromConfig = isBlobVersioningEnabled;
+    this.db = new Loki(
+      lokiDBPath,
+      inMemory
+        ? {
+            persistenceMethod: "memory"
+          }
+        : {
+            persistenceMethod: "fs",
+            autosave: true,
+            autosaveInterval: 5000
+          }
+    );
   }
 
   public isInitialized(): boolean {
@@ -146,6 +167,51 @@ export default class LokiBlobMetadataStore
 
     // In loki DB implementation, these operations are all sync. Doesn't need an async lock
 
+    // Create account model collection if not exists and initialize it
+    let accountModelCollection = this.db.getCollection<AccountModel>(
+      this.ACCOUNT_MODEL_COLLECTION
+    );
+
+    if (accountModelCollection === null) {
+      accountModelCollection = this.db.addCollection(
+        this.ACCOUNT_MODEL_COLLECTION,
+        {
+          unique: ["key"]
+        }
+      );
+
+      // Initialize the account model with default values
+      const accountModelDefault: AccountModel = {
+        key: "account", // This is to force loki to treat this as a singleton
+        isBlobVersioningEnabled: this.isBlobVersioningEnabledFromConfig ?? false
+      };
+
+      accountModelCollection.insert(accountModelDefault);
+    }
+
+    const accountModelFromDb = accountModelCollection.by(
+      "key",
+      "account"
+    ) as AccountModel;
+
+    if (accountModelFromDb === null || accountModelFromDb === undefined) {
+      throw new Error(
+        "Attempted to retrieve account model from db, but it is null or undefined."
+      );
+    }
+
+    if (
+      this.isBlobVersioningEnabledFromConfig !== undefined &&
+      this.isBlobVersioningEnabledFromConfig !==
+        accountModelFromDb.isBlobVersioningEnabled
+    ) {
+      accountModelFromDb.isBlobVersioningEnabled =
+        this.isBlobVersioningEnabledFromConfig;
+      accountModelCollection.update(accountModelFromDb);
+    }
+
+    this.accountModel = accountModelFromDb;
+
     // Create service properties collection if not exists
     let servicePropertiesColl = this.db.getCollection(this.SERVICES_COLLECTION);
     if (servicePropertiesColl === null) {
@@ -166,7 +232,7 @@ export default class LokiBlobMetadataStore
     // Create containers collection if not exists
     if (this.db.getCollection(this.BLOBS_COLLECTION) === null) {
       this.db.addCollection(this.BLOBS_COLLECTION, {
-        indices: ["accountName", "containerName", "name", "snapshot"] // Optimize for find operation
+        indices: ["accountName", "containerName", "name", "snapshot", "version"] // Optimize for find operation
       });
     }
 
@@ -329,9 +395,9 @@ export default class LokiBlobMetadataStore
       prefix === ""
         ? { name: { $gt: marker }, accountName: account }
         : {
-          name: { $regex: `^${this.escapeRegex(prefix)}`, $gt: marker },
-          accountName: account
-        };
+            name: { $regex: `^${this.escapeRegex(prefix)}`, $gt: marker },
+            accountName: account
+          };
 
     // Workaround for loki which will ignore $gt when providing $regex
     const query2 = { name: { $gt: marker } };
@@ -753,10 +819,10 @@ export default class LokiBlobMetadataStore
 
     const leaseTimeSeconds: number =
       doc.properties.leaseState === Models.LeaseStateType.Breaking &&
-        doc.leaseBreakTime
+      doc.leaseBreakTime
         ? Math.round(
-          (doc.leaseBreakTime.getTime() - context.startTime!.getTime()) / 1000
-        )
+            (doc.leaseBreakTime.getTime() - context.startTime!.getTime()) / 1000
+          )
         : 0;
 
     coll.update(doc);
@@ -830,7 +896,7 @@ export default class LokiBlobMetadataStore
     container?: string,
     where?: string,
     maxResults: number = DEFAULT_LIST_BLOBS_MAX_RESULTS,
-    marker: string = "",
+    marker: string = ""
   ): Promise<[FilterBlobModel[], string | undefined]> {
     const query: any = {};
     if (account !== undefined) {
@@ -838,14 +904,13 @@ export default class LokiBlobMetadataStore
     }
     if (container !== undefined) {
       query.containerName = container;
-      await this.checkContainerExist(
-        context,
-        account,
-        container
-      );
+      await this.checkContainerExist(context, account, container);
     }
 
-    const filterFunction = generateQueryBlobWithTagsWhereFunction(context, where!);
+    const filterFunction = generateQueryBlobWithTagsWhereFunction(
+      context,
+      where!
+    );
 
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
     const page = new FilterBlobPage<FilterBlobModel>(maxResults);
@@ -857,7 +922,7 @@ export default class LokiBlobMetadataStore
           return obj.name > marker!;
         })
         .where((obj) => {
-          return obj.snapshot === undefined || obj.snapshot === '';
+          return obj.snapshot === undefined || obj.snapshot === "";
         })
         .sort((obj1, obj2) => {
           if (obj1.name === obj2.name) return 0;
@@ -868,22 +933,24 @@ export default class LokiBlobMetadataStore
         .limit(maxResults)
         .data();
 
-      return doc.map((item) => {
-        let blobItem: FilterBlobModel;
-        blobItem = {
-          name: item.name,
-          containerName: item.containerName,
-          tags: item.blobTags
-        };
-        return blobItem;
-      }).filter((blobItem) => {
-        const tagsMeetConditions = filterFunction(blobItem);
-        if (tagsMeetConditions.length !== 0) {
-          blobItem.tags = { blobTagSet: toBlobTags(tagsMeetConditions) };
-          return true;
-        }
-        return false;
-      });
+      return doc
+        .map((item) => {
+          let blobItem: FilterBlobModel;
+          blobItem = {
+            name: item.name,
+            containerName: item.containerName,
+            tags: item.blobTags
+          };
+          return blobItem;
+        })
+        .filter((blobItem) => {
+          const tagsMeetConditions = filterFunction(blobItem);
+          if (tagsMeetConditions.length !== 0) {
+            blobItem.tags = { blobTagSet: toBlobTags(tagsMeetConditions) };
+            return true;
+          }
+          return false;
+        });
     };
 
     const nameItem = (item: FilterBlobModel) => {
@@ -892,10 +959,7 @@ export default class LokiBlobMetadataStore
 
     const [blobItems, nextMarker] = await page.fill(readPage, nameItem);
 
-    return [
-      blobItems,
-      nextMarker
-    ];
+    return [blobItems, nextMarker];
   }
 
   public async listBlobs(
@@ -925,7 +989,11 @@ export default class LokiBlobMetadataStore
     }
 
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
-    const page = new PageWithDelimiter<BlobModel>(maxResults, delimiter, prefix);
+    const page = new PageWithDelimiter<BlobModel>(
+      maxResults,
+      delimiter,
+      prefix
+    );
     const readPage = async (offset: number): Promise<BlobModel[]> => {
       return await coll
         .chain()
@@ -953,7 +1021,10 @@ export default class LokiBlobMetadataStore
       return item.name;
     };
 
-    const [blobItems, blobPrefixes, nextMarker] = await page.fill(readPage, nameItem);
+    const [blobItems, blobPrefixes, nextMarker] = await page.fill(
+      readPage,
+      nameItem
+    );
 
     return [
       blobItems.map((doc) => {
@@ -1031,12 +1102,30 @@ export default class LokiBlobMetadataStore
       blob.containerName
     );
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
-    const blobDoc = coll.findOne({
-      accountName: blob.accountName,
-      containerName: blob.containerName,
-      name: blob.name,
-      snapshot: blob.snapshot
-    });
+
+    let blobDocFindChain = coll.chain();
+
+    if (this.accountModel?.isBlobVersioningEnabled && blob.versionId) {
+      blobDocFindChain = blobDocFindChain.find({
+        accountName: blob.accountName,
+        containerName: blob.containerName,
+        name: blob.name,
+        snapshot: blob.snapshot,
+        version: blob.versionId
+      });
+    } else {
+      blobDocFindChain = blobDocFindChain.find({
+        accountName: blob.accountName,
+        containerName: blob.containerName,
+        name: blob.name,
+        snapshot: blob.snapshot
+      });
+    }
+
+    const blobDoc = blobDocFindChain
+      .simplesort("versionId", true)
+      .limit(1)
+      .data()[0];
 
     validateWriteConditions(context, modifiedAccessConditions, blobDoc);
 
@@ -1044,7 +1133,8 @@ export default class LokiBlobMetadataStore
     if (
       modifiedAccessConditions &&
       modifiedAccessConditions.ifNoneMatch === "*" &&
-      blobDoc
+      blobDoc &&
+      !this.accountModel?.isBlobVersioningEnabled
     ) {
       throw StorageErrorFactory.getBlobAlreadyExists(context.contextId);
     }
@@ -1060,8 +1150,18 @@ export default class LokiBlobMetadataStore
       ) {
         throw StorageErrorFactory.getBlobArchived(context.contextId);
       }
-      coll.remove(blobDoc);
+
+      if (this.accountModel?.isBlobVersioningEnabled) {
+        blobDoc.isCurrentVersion = false;
+        coll.update(blobDoc);
+      } else {
+        coll.remove(blobDoc);
+      }
     }
+
+    blob.versionId = new Date().toISOString();
+    blob.isCurrentVersion = true;
+
     delete (blob as any).$loki;
     return coll.insert(blob);
   }
@@ -1766,10 +1866,10 @@ export default class LokiBlobMetadataStore
 
     const leaseTimeSeconds: number =
       doc.properties.leaseState === Models.LeaseStateType.Breaking &&
-        doc.leaseBreakTime
+      doc.leaseBreakTime
         ? Math.round(
-          (doc.leaseBreakTime.getTime() - context.startTime!.getTime()) / 1000
-        )
+            (doc.leaseBreakTime.getTime() - context.startTime!.getTime()) / 1000
+          )
         : 0;
 
     coll.update(doc);
@@ -1934,8 +2034,10 @@ export default class LokiBlobMetadataStore
       throw StorageErrorFactory.getBlobNotFound(context.contextId!);
     }
 
-    if (sourceBlob.properties.accessTier === Models.AccessTier.Archive
-      && (tier === undefined || source.account !== destination.account)) {
+    if (
+      sourceBlob.properties.accessTier === Models.AccessTier.Archive &&
+      (tier === undefined || source.account !== destination.account)
+    ) {
       throw StorageErrorFactory.getBlobArchived(context.contextId!);
     }
 
@@ -1981,7 +2083,9 @@ export default class LokiBlobMetadataStore
         remainingRetentionDays: undefined,
         archiveStatus: undefined,
         accessTierChangeTime: undefined,
-        ...(sourceBlob.properties.blobType === Models.BlobType.AppendBlob && { isSealed: options.sealBlob }),
+        ...(sourceBlob.properties.blobType === Models.BlobType.AppendBlob && {
+          isSealed: options.sealBlob
+        })
       },
       metadata:
         metadata === undefined || Object.keys(metadata).length === 0
@@ -2000,7 +2104,10 @@ export default class LokiBlobMetadataStore
         destBlob !== undefined ? destBlob.leaseBreakTime : undefined,
       committedBlocksInOrder: sourceBlob.committedBlocksInOrder,
       persistency: sourceBlob.persistency,
-      blobTags: options.blobTagsString === undefined ? undefined : getTagsFromString(options.blobTagsString, context.contextId!)
+      blobTags:
+        options.blobTagsString === undefined
+          ? undefined
+          : getTagsFromString(options.blobTagsString, context.contextId!)
     };
 
     if (
@@ -2076,7 +2183,7 @@ export default class LokiBlobMetadataStore
         ifUnmodifiedSince:
           options.sourceModifiedAccessConditions.sourceIfUnmodifiedSince,
         ifMatch: options.sourceModifiedAccessConditions.sourceIfMatch,
-        ifNoneMatch: options.sourceModifiedAccessConditions.sourceIfNoneMatch,
+        ifNoneMatch: options.sourceModifiedAccessConditions.sourceIfNoneMatch
         // Storage service will ignore x-ms-source-if-tags header for copyFromUrl
       },
       sourceBlob
@@ -2188,9 +2295,12 @@ export default class LokiBlobMetadataStore
         destBlob !== undefined ? destBlob.leaseBreakTime : undefined,
       committedBlocksInOrder: sourceBlob.committedBlocksInOrder,
       persistency: sourceBlob.persistency,
-      blobTags: options.copySourceTags === Models.BlobCopySourceTags.COPY ?
-        sourceBlob.blobTags
-        : options.blobTagsString === undefined ? undefined : getTagsFromString(options.blobTagsString, context.contextId!)
+      blobTags:
+        options.copySourceTags === Models.BlobCopySourceTags.COPY
+          ? sourceBlob.blobTags
+          : options.blobTagsString === undefined
+            ? undefined
+            : getTagsFromString(options.blobTagsString, context.contextId!)
     };
 
     if (
@@ -2281,7 +2391,9 @@ export default class LokiBlobMetadataStore
       // Archive -> Coo/Hot will return 202
       if (
         doc.properties.accessTier === Models.AccessTier.Archive &&
-        (tier === Models.AccessTier.Cool || tier === Models.AccessTier.Hot || tier === Models.AccessTier.Cold)
+        (tier === Models.AccessTier.Cool ||
+          tier === Models.AccessTier.Hot ||
+          tier === Models.AccessTier.Cold)
       ) {
         responseCode = 202;
       }
@@ -2418,10 +2530,7 @@ export default class LokiBlobMetadataStore
     }
 
     const lease = new BlobLeaseAdapter(doc);
-    new BlobWriteLeaseValidator(leaseAccessConditions).validate(
-      lease,
-      context
-    );
+    new BlobWriteLeaseValidator(leaseAccessConditions).validate(lease, context);
 
     if (doc.properties.isSealed) {
       throw StorageErrorFactory.getBlobSealed(context.contextId);
@@ -3521,22 +3630,22 @@ export default class LokiBlobMetadataStore
   }
 
   /**
-     * Seal blob.
-     *
-     * @param {Context} context
-     * @param {string} account
-     * @param {string} container
-     * @param {string} blob
-     * @returns {Promise<void>}
-     * @memberof IBlobMetadataStore
-     */
+   * Seal blob.
+   *
+   * @param {Context} context
+   * @param {string} account
+   * @param {string} container
+   * @param {string} blob
+   * @returns {Promise<void>}
+   * @memberof IBlobMetadataStore
+   */
   public async sealBlob(
     context: Context,
     account: string,
     container: string,
     blob: string,
     snapshot: string | undefined,
-    options: Models.AppendBlobSealOptionalParams,
+    options: Models.AppendBlobSealOptionalParams
   ): Promise<Models.BlobPropertiesInternal> {
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
     const doc = await this.getBlob(context, account, container, blob);
@@ -3552,7 +3661,10 @@ export default class LokiBlobMetadataStore
     }
 
     const lease = new BlobLeaseAdapter(doc);
-    new BlobWriteLeaseValidator(options.leaseAccessConditions).validate(lease, context);
+    new BlobWriteLeaseValidator(options.leaseAccessConditions).validate(
+      lease,
+      context
+    );
     new BlobWriteLeaseSyncer(doc).sync(lease);
 
     doc.properties.isSealed = true;
