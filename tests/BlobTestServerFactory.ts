@@ -15,7 +15,8 @@ export default class BlobTestServerFactory {
   ): BlobServer | SqlBlobServer {
     const databaseConnectionString = process.env.AZURITE_TEST_DB;
     const isSQL = databaseConnectionString !== undefined;
-    const inMemoryPersistence = process.env.AZURITE_TEST_INMEMORYPERSISTENCE !== undefined;
+    const inMemoryPersistence =
+      process.env.AZURITE_TEST_INMEMORYPERSISTENCE !== undefined;
 
     const port = 11000;
     const host = "127.0.0.1";
@@ -31,7 +32,9 @@ export default class BlobTestServerFactory {
 
     if (isSQL) {
       if (inMemoryPersistence) {
-        throw new Error(`The in-memory persistence settings is not supported when using SQL-based metadata.`)
+        throw new Error(
+          `The in-memory persistence settings is not supported when using SQL-based metadata.`
+        );
       }
 
       const config = new SqlBlobConfiguration(
@@ -51,7 +54,7 @@ export default class BlobTestServerFactory {
         key,
         undefined,
         oauth,
-        undefined,
+        undefined
       );
 
       return new SqlBlobServer(config);
@@ -76,7 +79,9 @@ export default class BlobTestServerFactory {
         undefined,
         oauth,
         undefined,
-        inMemoryPersistence
+        inMemoryPersistence,
+        undefined,
+        true
       );
       return new BlobServer(config);
     }

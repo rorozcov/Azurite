@@ -1103,24 +1103,12 @@ export default class LokiBlobMetadataStore
     );
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
 
-    let blobDocFindChain = coll.chain();
-
-    if (this.accountModel?.isBlobVersioningEnabled && blob.versionId) {
-      blobDocFindChain = blobDocFindChain.find({
-        accountName: blob.accountName,
-        containerName: blob.containerName,
-        name: blob.name,
-        snapshot: blob.snapshot,
-        version: blob.versionId
-      });
-    } else {
-      blobDocFindChain = blobDocFindChain.find({
-        accountName: blob.accountName,
-        containerName: blob.containerName,
-        name: blob.name,
-        snapshot: blob.snapshot
-      });
-    }
+    let blobDocFindChain = coll.chain().find({
+      accountName: blob.accountName,
+      containerName: blob.containerName,
+      name: blob.name,
+      snapshot: blob.snapshot
+    });
 
     const blobDoc = blobDocFindChain
       .simplesort("versionId", true)
@@ -1159,7 +1147,6 @@ export default class LokiBlobMetadataStore
       }
     }
 
-    blob.versionId = new Date().toISOString();
     blob.isCurrentVersion = true;
 
     delete (blob as any).$loki;

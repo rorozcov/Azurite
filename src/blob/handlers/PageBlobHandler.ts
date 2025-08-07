@@ -13,7 +13,10 @@ import IBlobMetadataStore, {
   BlobModel
 } from "../persistence/IBlobMetadataStore";
 import { BLOB_API_VERSION } from "../utils/constants";
-import { deserializePageBlobRangeHeader, getTagsFromString } from "../utils/utils";
+import {
+  deserializePageBlobRangeHeader,
+  getTagsFromString
+} from "../utils/utils";
 import BaseHandler from "./BaseHandler";
 import IPageBlobRangesManager from "./IPageBlobRangesManager";
 
@@ -25,8 +28,10 @@ import IPageBlobRangesManager from "./IPageBlobRangesManager";
  * @extends {BaseHandler}
  * @implements {IPageBlobHandler}
  */
-export default class PageBlobHandler extends BaseHandler
-  implements IPageBlobHandler {
+export default class PageBlobHandler
+  extends BaseHandler
+  implements IPageBlobHandler
+{
   constructor(
     metadataStore: IBlobMetadataStore,
     extentStore: IExtentStore,
@@ -100,10 +105,12 @@ export default class PageBlobHandler extends BaseHandler
 
     // Preserve metadata key case
     const metadata = convertRawHeadersToMetadata(
-      blobCtx.request!.getRawHeaders(), context.contextId!
+      blobCtx.request!.getRawHeaders(),
+      context.contextId!
     );
 
     const etag = newEtag();
+    const versionId = date.toISOString();
     const blob: BlobModel = {
       deleted: false,
       metadata,
@@ -136,8 +143,12 @@ export default class PageBlobHandler extends BaseHandler
       },
       snapshot: "",
       isCommitted: true,
-      pageRangesInOrder: [],      
-      blobTags: options.blobTagsString === undefined ? undefined : getTagsFromString(options.blobTagsString, context.contextId!),
+      pageRangesInOrder: [],
+      blobTags:
+        options.blobTagsString === undefined
+          ? undefined
+          : getTagsFromString(options.blobTagsString, context.contextId!),
+      versionId: versionId
     };
 
     // TODO: What's happens when create page blob right before commit block list? Or should we lock
@@ -158,7 +169,8 @@ export default class PageBlobHandler extends BaseHandler
       version: BLOB_API_VERSION,
       date,
       isServerEncrypted: true,
-      clientRequestId: options.requestId
+      clientRequestId: options.requestId,
+      versionId: versionId // TODO: Remove if versioning is off.
     };
 
     return response;
