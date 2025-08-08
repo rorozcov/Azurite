@@ -139,6 +139,14 @@ export default class LokiBlobMetadataStore
     );
   }
 
+  public isBlobVersioningEnabled(): boolean {
+    if (!this.accountModel) {
+      throw new Error("Account model is not initialized.");
+    }
+
+    return this.accountModel.isBlobVersioningEnabled;
+  }
+
   public isInitialized(): boolean {
     return this.initialized;
   }

@@ -5,6 +5,7 @@ import IGCExtentProvider from "../../common/IGCExtentProvider";
 import * as Models from "../generated/artifacts/models";
 import Context from "../generated/Context";
 import { FilterBlobItem } from "../generated/artifacts/models";
+import { AccountModel } from "../AccountModel";
 
 /**
  * This model describes a chunk inside a persistency extent for a given extent ID.
@@ -54,7 +55,8 @@ interface IGetContainerAccessPolicyResponse {
   properties: Models.ContainerProperties;
   containerAcl?: Models.SignedIdentifier[];
 }
-export type GetContainerAccessPolicyResponse = IGetContainerAccessPolicyResponse;
+export type GetContainerAccessPolicyResponse =
+  IGetContainerAccessPolicyResponse;
 
 // The params for setContainerAccessPolicy.
 interface ISetContainerAccessPolicyOptions {
@@ -215,8 +217,8 @@ export type BlockModel = IBlockAdditionalProperties & PersistencyBlockModel;
  */
 export interface IBlobMetadataStore
   extends IGCExtentProvider,
-  IDataStore,
-  ICleaner {
+    IDataStore,
+    ICleaner {
   /**
    * Update blob service properties. Create service properties if not exists in persistency layer.
    *
@@ -511,7 +513,7 @@ export interface IBlobMetadataStore
     container?: string,
     where?: string,
     maxResults?: number,
-    marker?: string,
+    marker?: string
   ): Promise<[FilterBlobModel[], string | undefined]>;
 
   /**
@@ -1138,7 +1140,7 @@ export interface IBlobMetadataStore
     blob: string,
     snapshot: string | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
-    modifiedAccessConditions?: Models.ModifiedAccessConditions,
+    modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<BlobTags | undefined>;
 
   /**
@@ -1157,9 +1159,13 @@ export interface IBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
-    options: Models.AppendBlobSealOptionalParams,
+    options: Models.AppendBlobSealOptionalParams
   ): Promise<Models.BlobPropertiesInternal>;
 
+  /*
+   * Gets whether the metadata store has enabled blob versioning.
+   */
+  isBlobVersioningEnabled(): boolean;
 }
 
 export default IBlobMetadataStore;

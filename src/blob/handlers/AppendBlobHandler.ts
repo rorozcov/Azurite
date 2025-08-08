@@ -51,7 +51,9 @@ export default class AppendBlobHandler
       context.contextId!
     );
 
-    const versionId = date.toISOString();
+    const versionId = this.metadataStore.isBlobVersioningEnabled()
+      ? date.toISOString()
+      : undefined;
 
     const blob: BlobModel = {
       deleted: false,

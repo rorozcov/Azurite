@@ -110,7 +110,10 @@ export default class PageBlobHandler
     );
 
     const etag = newEtag();
-    const versionId = date.toISOString();
+    const versionId = this.metadataStore.isBlobVersioningEnabled()
+      ? date.toISOString()
+      : undefined;
+
     const blob: BlobModel = {
       deleted: false,
       metadata,
@@ -170,7 +173,7 @@ export default class PageBlobHandler
       date,
       isServerEncrypted: true,
       clientRequestId: options.requestId,
-      versionId: versionId // TODO: Remove if versioning is off.
+      versionId: versionId
     };
 
     return response;
