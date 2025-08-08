@@ -240,7 +240,13 @@ export default class LokiBlobMetadataStore
     // Create containers collection if not exists
     if (this.db.getCollection(this.BLOBS_COLLECTION) === null) {
       this.db.addCollection(this.BLOBS_COLLECTION, {
-        indices: ["accountName", "containerName", "name", "snapshot", "version"] // Optimize for find operation
+        indices: [
+          "accountName",
+          "containerName",
+          "name",
+          "snapshot",
+          "versionId"
+        ] // Optimize for find operation
       });
     }
 
@@ -1126,6 +1132,7 @@ export default class LokiBlobMetadataStore
     validateWriteConditions(context, modifiedAccessConditions, blobDoc);
 
     // Create if not exists
+    // TODO: Double check behaviour when versioning is enabled.
     if (
       modifiedAccessConditions &&
       modifiedAccessConditions.ifNoneMatch === "*" &&
@@ -1351,7 +1358,8 @@ export default class LokiBlobMetadataStore
     blob: string,
     snapshot: string = "",
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
-    modifiedAccessConditions?: Models.ModifiedAccessConditions
+    modifiedAccessConditions?: Models.ModifiedAccessConditions,
+    versionId: string = ""
   ): Promise<GetBlobPropertiesRes> {
     const doc = await this.getBlobWithLeaseUpdated(
       account,
@@ -1360,7 +1368,8 @@ export default class LokiBlobMetadataStore
       snapshot,
       context,
       false,
-      true
+      true,
+      versionId
     );
 
     validateReadConditions(context, modifiedAccessConditions, doc);
@@ -3435,7 +3444,8 @@ export default class LokiBlobMetadataStore
     snapshot: string | undefined,
     context: Context,
     forceExist: false,
-    forceCommitted?: boolean
+    forceCommitted?: boolean,
+    versionId?: string
   ): Promise<BlobModel | undefined>;
 
   private async getBlobWithLeaseUpdated(
@@ -3445,20 +3455,30 @@ export default class LokiBlobMetadataStore
     snapshot: string = "",
     context: Context,
     forceExist?: boolean,
-    forceCommitted?: boolean
+    forceCommitted?: boolean,
+    versionId?: string
   ): Promise<BlobModel | undefined> {
     await this.checkContainerExist(context, account, container);
 
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
-    const doc = coll.findOne({
+
+    let blobDocFindChain = coll.chain().find({
       accountName: account,
       containerName: container,
       name: blob,
       snapshot
     });
 
-    // Force exist if parameter forceExist is undefined or true
+    if (versionId) {
+      blobDocFindChain = blobDocFindChain.find({ versionId: versionId });
+    } else {
+      blobDocFindChain = blobDocFindChain.simplesort("versionId", true);
+    }
+
+    const doc = blobDocFindChain.data()[0];
+
     if (forceExist === undefined || forceExist === true) {
+      // Force exist if parameter forceExist is undefined or true
       if (forceCommitted) {
         if (!doc || !(doc as BlobModel).isCommitted) {
           throw StorageErrorFactory.getBlobNotFound(context.contextId);

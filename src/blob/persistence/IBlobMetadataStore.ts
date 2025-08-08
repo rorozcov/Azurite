@@ -5,7 +5,6 @@ import IGCExtentProvider from "../../common/IGCExtentProvider";
 import * as Models from "../generated/artifacts/models";
 import Context from "../generated/Context";
 import { FilterBlobItem } from "../generated/artifacts/models";
-import { AccountModel } from "../AccountModel";
 
 /**
  * This model describes a chunk inside a persistency extent for a given extent ID.

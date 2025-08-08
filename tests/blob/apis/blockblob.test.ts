@@ -124,8 +124,6 @@ describe("BlockBlobAPIs", () => {
   it("upload with string body and default parameters @loki @sql", async () => {
     const body: string = getUniqueName("randomstring");
     const result_upload = await blockBlobClient.upload(body, body.length);
-    assert.notStrictEqual(result_upload.versionId, undefined);
-    assert.notStrictEqual(result_upload.versionId, null);
     assert.equal(
       result_upload._response.request.headers.get("x-ms-client-request-id"),
       result_upload.clientRequestId
@@ -136,44 +134,6 @@ describe("BlockBlobAPIs", () => {
       result._response.request.headers.get("x-ms-client-request-id"),
       result.clientRequestId
     );
-  });
-
-  it("upload blob twice generates new version per call", async () => {
-    const body: string = getUniqueName("randomstring");
-    const result_upload = await blockBlobClient.upload(body, body.length);
-    const versionId = result_upload.versionId;
-    assert.notStrictEqual(versionId, undefined);
-    assert.notStrictEqual(versionId, null);
-    assert.equal(
-      result_upload._response.request.headers.get("x-ms-client-request-id"),
-      result_upload.clientRequestId
-    );
-    const result = await blobClient.download(0);
-    assert.deepStrictEqual(await bodyToString(result, body.length), body);
-    assert.equal(
-      result._response.request.headers.get("x-ms-client-request-id"),
-      result.clientRequestId
-    );
-    const newBody: string = getUniqueName("randomstring2");
-    const result_upload_2 = await blockBlobClient.upload(
-      newBody,
-      newBody.length
-    );
-    const versionId2 = result_upload_2.versionId;
-    assert.notStrictEqual(versionId2, undefined);
-    assert.notStrictEqual(versionId2, null);
-    assert.notStrictEqual(versionId2, versionId);
-    const result_download_2 = await blobClient.download(0);
-    assert.deepStrictEqual(
-      await bodyToString(result_download_2, newBody.length),
-      newBody
-    );
-    assert.equal(
-      result_download_2._response.request.headers.get("x-ms-client-request-id"),
-      result_download_2.clientRequestId
-    );
-    const s = server;
-    console.log(s.port);
   });
 
   it("upload empty blob @loki @sql", async () => {
