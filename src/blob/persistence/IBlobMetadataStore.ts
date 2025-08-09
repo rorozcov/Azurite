@@ -173,6 +173,7 @@ export type ChangeBlobLeaseResponse = IBlobLeaseResponse;
 interface ICreateSnapshotResponse {
   properties: Models.BlobPropertiesInternal;
   snapshot: string;
+  versionIdHeader?: string;
 }
 export type CreateSnapshotResponse = ICreateSnapshotResponse;
 
@@ -182,6 +183,7 @@ interface IBlobId {
   container: string;
   blob: string;
   snapshot?: string;
+  versionId?: string;
 }
 export type BlobId = IBlobId;
 
@@ -522,7 +524,7 @@ export interface IBlobMetadataStore
    * @param {BlobModel} blob
    * @param {Models.LeaseAccessConditions} [leaseAccessConditions] Optional. Will validate lease if provided
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
-   * @returns {Promise<void>}
+   * @returns {Promise<BlobModel>}
    * @memberof IBlobMetadataStore
    */
   createBlob(
@@ -530,7 +532,7 @@ export interface IBlobMetadataStore
     blob: BlobModel,
     leaseAccessConditions?: Models.LeaseAccessConditions,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
-  ): Promise<void>;
+  ): Promise<BlobModel>;
 
   /**
    * Create snapshot.
@@ -564,6 +566,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {(string | undefined)} snapshot
+   * @param {(string | undefined)} versionId
    * @param {Models.LeaseAccessConditions} [leaseAccessConditions] Optional. Will validate lease if provided
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
    * @returns {Promise<BlobModel>}
@@ -575,6 +578,7 @@ export interface IBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     leaseAccessConditions?: Models.LeaseAccessConditions,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<BlobModel>;
@@ -587,6 +591,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {(string | undefined)} snapshot
+   * @param {(string | undefined)} versionId
    * @param {(Models.LeaseAccessConditions | undefined)} leaseAccessConditions
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
    * @returns {Promise<GetBlobPropertiesRes>}
@@ -598,6 +603,7 @@ export interface IBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<GetBlobPropertiesRes>;
@@ -610,6 +616,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {Models.BlobDeleteMethodOptionalParams} options
+   * @param {string} [versionId]
    * @returns {Promise<void>}
    * @memberof IBlobMetadataStore
    */
@@ -618,7 +625,8 @@ export interface IBlobMetadataStore
     account: string,
     container: string,
     blob: string,
-    options: Models.BlobDeleteMethodOptionalParams
+    options: Models.BlobDeleteMethodOptionalParams,
+    versionId?: string
   ): Promise<void>;
 
   /**
@@ -784,6 +792,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {string} [snapshot]
+   * @param {string} [versionId]
    * @returns {Promise<void>}
    * @memberof IBlobMetadataStore
    */
@@ -792,7 +801,8 @@ export interface IBlobMetadataStore
     account: string,
     container: string,
     blob: string,
-    snapshot?: string
+    snapshot?: string,
+    versionId?: string
   ): Promise<void>;
 
   /**
@@ -802,6 +812,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {string} [snapshot]
+   * @param {string} [versionId]
    * @returns {(Promise<
    *     { blobType: Models.BlobType | undefined; isCommitted: boolean } | undefined
    *   >)}
@@ -943,6 +954,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {string} [snapshot]
+   * @param {string} [versionId]
    * @param {(boolean | undefined)} isCommitted
    * @param {Context} context
    * @returns {Promise<{
@@ -958,6 +970,7 @@ export interface IBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     isCommitted: boolean | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
     modifiedAccessConditions: Models.ModifiedAccessConditions | undefined
@@ -965,9 +978,7 @@ export interface IBlobMetadataStore
     properties: Models.BlobPropertiesInternal;
     uncommittedBlocks: Models.Block[];
     committedBlocks: Models.Block[];
-  }>;
-
-  /**
+  }> /**
    * Upload new pages for page blob.
    *
    * @param {Context} context
@@ -980,7 +991,7 @@ export interface IBlobMetadataStore
    * @param {Models.SequenceNumberAccessConditions} [sequenceNumberAccessConditions]
    * @returns {Promise<Models.BlobProperties>}
    * @memberof IBlobMetadataStore
-   */
+   */;
   uploadPages(
     context: Context,
     blob: BlobModel,
@@ -1102,6 +1113,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {(string | undefined)} snapshot
+   * @param {(string | undefined)} versionId
    * @param {(Models.LeaseAccessConditions | undefined)} leaseAccessConditions
    * @param {(Models.BlobMetadata | undefined)} metadata
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
@@ -1114,6 +1126,7 @@ export interface IBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
     tags: Models.BlobTags | undefined,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
@@ -1127,6 +1140,7 @@ export interface IBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {(string | undefined)} snapshot
+   * @param {(string | undefined)} versionId
    * @param {(Models.LeaseAccessConditions | undefined)} leaseAccessConditions
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
    * @returns {Promise<BlobTags | undefined>}
@@ -1138,6 +1152,7 @@ export interface IBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<BlobTags | undefined>;

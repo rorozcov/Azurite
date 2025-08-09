@@ -129,7 +129,6 @@ export default class BlockBlobHandler
         accessTierInferred: true,
         accessTierChangeTime: date
       },
-      snapshot: "",
       isCommitted: true,
       persistency,
       blobTags:
@@ -351,7 +350,6 @@ export default class BlockBlobHandler
       accountName,
       containerName,
       name: blobName,
-      snapshot: "",
       blobTags:
         options.blobTagsString === undefined
           ? undefined

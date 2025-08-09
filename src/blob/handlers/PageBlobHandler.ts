@@ -144,7 +144,6 @@ export default class PageBlobHandler
         //   : Models.AccessTier.P4, // TODO: Infer tier from size
         // accessTierInferred
       },
-      snapshot: "",
       isCommitted: true,
       pageRangesInOrder: [],
       blobTags:

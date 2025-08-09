@@ -78,7 +78,6 @@ export default class AppendBlobHandler
         serverEncrypted: true,
         isSealed: false
       },
-      snapshot: "",
       isCommitted: true,
       committedBlocksInOrder: [],
       blobTags:

@@ -5,6 +5,10 @@ import { USERDELEGATIONKEY_BASIC_KEY } from "./constants";
 import { BlobTag, BlobTags } from "@azure/storage-blob";
 import { TagContent } from "../persistence/QueryInterpreter/QueryNodes/IQueryNode";
 
+export function isNullOrWhitespace(str: string | null | undefined): boolean {
+  return !str?.trim();
+}
+
 export function checkApiVersion(
   inputApiVersion: string,
   validApiVersions: Array<string>,
@@ -153,7 +157,7 @@ export function getUserDelegationKeyValue(
   signedTenantid: string,
   signedStartsOn: string,
   signedExpiresOn: string,
-  signedVersion: string,
+  signedVersion: string
 ): string {
   const stringToSign = [
     signedObjectid,
@@ -164,17 +168,24 @@ export function getUserDelegationKeyValue(
     signedVersion
   ].join("\n");
 
-  return createHmac("sha256", USERDELEGATIONKEY_BASIC_KEY).update(stringToSign, "utf8").digest("base64");
+  return createHmac("sha256", USERDELEGATIONKEY_BASIC_KEY)
+    .update(stringToSign, "utf8")
+    .digest("base64");
 }
 
 export function getBlobTagsCount(
   blobTags: BlobTags | undefined
 ): number | undefined {
-  return (blobTags === undefined || blobTags?.blobTagSet.length === 0) ? undefined : blobTags?.blobTagSet.length
+  return blobTags === undefined || blobTags?.blobTagSet.length === 0
+    ? undefined
+    : blobTags?.blobTagSet.length;
 }
 
-export function getTagsFromString(blobTagsString: string, contextID: string): BlobTags | undefined {
-  if (blobTagsString === '' || blobTagsString === undefined) {
+export function getTagsFromString(
+  blobTagsString: string,
+  contextID: string
+): BlobTags | undefined {
+  if (blobTagsString === "" || blobTagsString === undefined) {
     return undefined;
   }
   let blobTags: BlobTag[] = [];
@@ -184,18 +195,18 @@ export function getTagsFromString(blobTagsString: string, contextID: string): Bl
     blobTags.push({
       // When the Blob tag is input with header, it's encoded, sometimes space will be encoded to "+" ("+" will be encoded to "%2B")
       // But in decodeURIComponent(), "+" won't be decode to space, so we need first replace "+" to "%20", then decode the tag.
-      key: decodeURIComponent(tagpair[0].replace(/\+/g, '%20')),
-      value: decodeURIComponent(tagpair[1].replace(/\+/g, '%20')),
+      key: decodeURIComponent(tagpair[0].replace(/\+/g, "%20")),
+      value: decodeURIComponent(tagpair[1].replace(/\+/g, "%20"))
     });
-  })
+  });
   validateBlobTag(
     {
-      blobTagSet: blobTags,
+      blobTagSet: blobTags
     },
     contextID
   );
   return {
-    blobTagSet: blobTags,
+    blobTagSet: blobTags
   };
 }
 
@@ -225,17 +236,21 @@ export function validateBlobTag(tags: BlobTags, contextID: string): void {
 
 function ContainsInvalidTagCharacter(s: string): boolean {
   for (let c of s) {
-    if (!(c >= 'a' && c <= 'z' ||
-      c >= 'A' && c <= 'Z' ||
-      c >= '0' && c <= '9' ||
-      c == ' ' ||
-      c == '+' ||
-      c == '-' ||
-      c == '.' ||
-      c == '/' ||
-      c == ':' ||
-      c == '=' ||
-      c == '_')) {
+    if (
+      !(
+        (c >= "a" && c <= "z") ||
+        (c >= "A" && c <= "Z") ||
+        (c >= "0" && c <= "9") ||
+        c == " " ||
+        c == "+" ||
+        c == "-" ||
+        c == "." ||
+        c == "/" ||
+        c == ":" ||
+        c == "=" ||
+        c == "_"
+      )
+    ) {
       return true;
     }
   }
@@ -244,8 +259,8 @@ function ContainsInvalidTagCharacter(s: string): boolean {
 
 export function toBlobTags(input: TagContent[]): BlobTag[] {
   const tags: Record<string, string> = {};
-  input.forEach(element => {
-    if (element.key !== '@container') {
+  input.forEach((element) => {
+    if (element.key !== "@container") {
       tags[element.key!] = element.value!;
     }
   });
@@ -254,6 +269,6 @@ export function toBlobTags(input: TagContent[]): BlobTag[] {
     return {
       key: key,
       value: value
-    }
+    };
   });
 }

@@ -68,6 +68,7 @@ import { generateQueryBlobWithTagsWhereFunction } from "./QueryInterpreter/Query
 import {
   getBlobTagsCount,
   getTagsFromString,
+  isNullOrWhitespace,
   toBlobTags
 } from "../utils/utils";
 import { AccountModel } from "../AccountModel";
@@ -1101,7 +1102,7 @@ export default class LokiBlobMetadataStore
    * @param {BlobModel} blob
    * @param {Models.LeaseAccessConditions} [leaseAccessConditions]
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
-   * @returns {Promise<void>}
+   * @returns {Promise<BlobModel>}
    * @memberof LokiBlobMetadataStore
    */
   public async createBlob(
@@ -1109,25 +1110,21 @@ export default class LokiBlobMetadataStore
     blob: BlobModel,
     leaseAccessConditions?: Models.LeaseAccessConditions,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
-  ): Promise<void> {
+  ): Promise<BlobModel> {
     await this.checkContainerExist(
       context,
       blob.accountName,
       blob.containerName
     );
+
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
 
-    let blobDocFindChain = coll.chain().find({
-      accountName: blob.accountName,
-      containerName: blob.containerName,
-      name: blob.name,
-      snapshot: blob.snapshot
-    });
-
-    const blobDoc = blobDocFindChain
-      .simplesort("versionId", true)
-      .limit(1)
-      .data()[0];
+    const blobDoc = this.findBlob(
+      context,
+      blob.accountName,
+      blob.containerName,
+      blob.name
+    );
 
     validateWriteConditions(context, modifiedAccessConditions, blobDoc);
 
@@ -1154,7 +1151,13 @@ export default class LokiBlobMetadataStore
         throw StorageErrorFactory.getBlobArchived(context.contextId);
       }
 
-      if (this.accountModel?.isBlobVersioningEnabled) {
+      if (this.isBlobVersioningEnabled() || blobDoc.isCurrentVersion) {
+        if (this.isBlobVersioningEnabled()) {
+          blobDoc.versionId = isNullOrWhitespace(blobDoc.versionId)
+            ? blobDoc.properties.lastModified.toISOString()
+            : blobDoc.versionId;
+        }
+
         blobDoc.isCurrentVersion = false;
         coll.update(blobDoc);
       } else {
@@ -1162,7 +1165,18 @@ export default class LokiBlobMetadataStore
       }
     }
 
-    blob.isCurrentVersion = true;
+    if (!this.isBlobVersioningEnabled()) {
+      blob.versionId = "";
+      blob.isCurrentVersion = undefined;
+    } else {
+      blob.versionId =
+        context.startTime?.toISOString() ?? new Date().toISOString();
+      blob.isCurrentVersion = true;
+    }
+
+    // When creating a blob, we are not creating a snapshot, therefore we use the
+    // non-snapshot version of the blob, which is empty string.
+    blob.snapshot = "";
 
     delete (blob as any).$loki;
     return coll.insert(blob);
@@ -1193,6 +1207,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       false,
@@ -1248,9 +1263,24 @@ export default class LokiBlobMetadataStore
 
     coll.insert(snapshotBlob);
 
+    let versionIdHeader: string | undefined = undefined;
+    if (this.isBlobVersioningEnabled()) {
+      // If versioning is enabled, a new version will always be created alongside the snapshot
+      // and contain the same contents as the snapshot.
+      snapshotBlob.snapshot = "";
+      const newVersion = await this.createBlob(
+        context,
+        snapshotBlob,
+        leaseAccessConditions,
+        modifiedAccessConditions
+      );
+      versionIdHeader = newVersion.versionId;
+    }
+
     return {
       properties: snapshotBlob.properties,
-      snapshot: snapshotTime
+      snapshot: snapshotTime,
+      versionIdHeader: versionIdHeader
     };
   }
 
@@ -1265,6 +1295,7 @@ export default class LokiBlobMetadataStore
    * @param {string} [snapshot=""]
    * @param {Models.LeaseAccessConditions} [leaseAccessConditions]
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
+   * @param {string} [versionId]
    * @returns {Promise<BlobModel>}
    * @memberof LokiBlobMetadataStore
    */
@@ -1274,6 +1305,7 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string = "",
+    versionId: string = "",
     leaseAccessConditions?: Models.LeaseAccessConditions,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<BlobModel> {
@@ -1282,6 +1314,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       snapshot,
+      versionId,
       context,
       false,
       true
@@ -1309,6 +1342,7 @@ export default class LokiBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {string} [snapshot]
+   * @param {string} [versionId]
    * @returns {(Promise<BlobModel | undefined>)}
    * @memberof LokiBlobMetadataStore
    */
@@ -1317,15 +1351,17 @@ export default class LokiBlobMetadataStore
     account: string,
     container: string,
     blob: string,
-    snapshot: string = ""
+    snapshot: string = "",
+    versionId: string = ""
   ): Promise<BlobModel | undefined> {
-    const coll = this.db.getCollection(this.BLOBS_COLLECTION);
-    const blobDoc = coll.findOne({
-      accountName: account,
-      containerName: container,
-      name: blob,
-      snapshot
-    });
+    const blobDoc = this.findBlob(
+      context,
+      account,
+      container,
+      blob,
+      snapshot,
+      versionId
+    );
 
     if (blobDoc) {
       const blobModel = blobDoc as BlobModel;
@@ -1348,6 +1384,7 @@ export default class LokiBlobMetadataStore
    * @param {string} [snapshot=""]
    * @param {(Models.LeaseAccessConditions | undefined)} leaseAccessConditions
    * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
+   * @param {string} [versionId]
    * @returns {Promise<GetBlobPropertiesRes>}
    * @memberof LokiBlobMetadataStore
    */
@@ -1357,19 +1394,19 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string = "",
+    versionId: string = "",
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
-    modifiedAccessConditions?: Models.ModifiedAccessConditions,
-    versionId: string = ""
+    modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<GetBlobPropertiesRes> {
     const doc = await this.getBlobWithLeaseUpdated(
       account,
       container,
       blob,
       snapshot,
+      versionId,
       context,
       false,
-      true,
-      versionId
+      true
     );
 
     validateReadConditions(context, modifiedAccessConditions, doc);
@@ -1404,6 +1441,7 @@ export default class LokiBlobMetadataStore
    * @param {string} container
    * @param {string} blob
    * @param {Models.BlobDeleteMethodOptionalParams} options
+   * @param {string} [versionId]
    * @returns {Promise<void>}
    * @memberof LokiBlobMetadataStore
    */
@@ -1412,18 +1450,35 @@ export default class LokiBlobMetadataStore
     account: string,
     container: string,
     blob: string,
-    options: Models.BlobDeleteMethodOptionalParams
+    options: Models.BlobDeleteMethodOptionalParams,
+    versionId: string = ""
   ): Promise<void> {
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
     await this.checkContainerExist(context, account, container);
+
+    const isVersionProvided = !isNullOrWhitespace(versionId);
+
+    if (
+      isVersionProvided &&
+      (!isNullOrWhitespace(options.snapshot) ||
+        options.deleteSnapshots !== undefined)
+    ) {
+      // TODO: Verify behaviour with real blob storage
+      throw StorageErrorFactory.getInvalidOperation(
+        context.contextId!,
+        "When deleting a blob version, you cannot specify a snapshot or deleteSnapshots option."
+      );
+    }
 
     const doc = await this.getBlobWithLeaseUpdated(
       account,
       container,
       blob,
       options.snapshot,
+      versionId,
       context,
-      false
+      false,
+      undefined
     );
 
     validateWriteConditions(context, options.modifiedAccessConditions, doc);
@@ -1447,22 +1502,41 @@ export default class LokiBlobMetadataStore
       context
     );
 
+    if (isVersionProvided) {
+      // TODO: Verify production azure behaviour when specifying snapshots to delete.
+      coll.findAndRemove({
+        accountName: account,
+        containerName: container,
+        name: blob,
+        snapshot: "",
+        versionId: versionId
+      });
+      return;
+    }
+
     // Scenario: Delete base blob only
     if (againstBaseBlob && options.deleteSnapshots === undefined) {
       const count = coll.count({
         accountName: account,
         containerName: container,
-        name: blob
+        name: blob,
+        snapshot: { $gt: "" } // Only count actual snapshots, not empty snapshot (base blob)
       });
       if (count > 1) {
         throw StorageErrorFactory.getSnapshotsPresent(context.contextId!);
       } else {
-        coll.findAndRemove({
-          accountName: account,
-          containerName: container,
-          name: blob
-        });
+        if (this.isBlobVersioningEnabled()) {
+          doc.isCurrentVersion = false;
+          coll.update(doc);
+        } else {
+          coll.findAndRemove({
+            accountName: account,
+            containerName: container,
+            name: blob
+          });
+        }
       }
+      return;
     }
 
     // Scenario: Delete one snapshot only
@@ -1473,6 +1547,7 @@ export default class LokiBlobMetadataStore
         name: blob,
         snapshot: doc.snapshot
       });
+      return;
     }
 
     // Scenario: Delete base blob and snapshots
@@ -1480,11 +1555,24 @@ export default class LokiBlobMetadataStore
       againstBaseBlob &&
       options.deleteSnapshots === Models.DeleteSnapshotsOptionType.Include
     ) {
-      coll.findAndRemove({
-        accountName: account,
-        containerName: container,
-        name: blob
-      });
+      if (!this.isBlobVersioningEnabled()) {
+        // If versioning is not enabled, we can delete the base blob directly
+        // and all its snapshots.
+        coll.findAndRemove({
+          accountName: account,
+          containerName: container,
+          name: blob
+        });
+      } else {
+        coll.findAndRemove({
+          accountName: account,
+          containerName: container,
+          name: blob,
+          snapshot: { $gt: "" }
+        });
+        doc.isCurrentVersion = false;
+        coll.update(doc);
+      }
     }
 
     // Scenario: Delete all snapshots only
@@ -1529,6 +1617,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       false,
@@ -1598,6 +1687,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       undefined,
+      undefined,
       context,
       false,
       true
@@ -1612,10 +1702,30 @@ export default class LokiBlobMetadataStore
     const lease = new BlobLeaseAdapter(doc);
     new BlobWriteLeaseValidator(leaseAccessConditions).validate(lease, context);
     new BlobWriteLeaseSyncer(doc).sync(lease);
-    doc.metadata = metadata;
-    doc.properties.etag = newEtag();
-    doc.properties.lastModified = context.startTime || new Date();
-    coll.update(doc);
+
+    if (this.isBlobVersioningEnabled()) {
+      // For versioning: mark old version as not current, create new version
+      doc.isCurrentVersion = false;
+      coll.update(doc);
+
+      // Prepare new version
+      doc.versionId =
+        context.startTime?.toISOString() || new Date().toISOString();
+      doc.isCurrentVersion = true;
+      doc.metadata = metadata;
+      doc.properties.etag = newEtag();
+      doc.properties.lastModified = context.startTime || new Date();
+
+      coll.insert(doc);
+    } else {
+      // For non-versioning: update existing document in place
+      doc.metadata = metadata;
+      doc.properties.etag = newEtag();
+      doc.properties.lastModified = context.startTime || new Date();
+
+      coll.update(doc);
+    }
+
     return doc.properties;
   }
 
@@ -1646,6 +1756,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       false
@@ -1697,6 +1808,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       undefined,
+      undefined,
       context,
       false
     ); // This may return an uncommitted blob, or undefined for an nonexistent blob
@@ -1746,6 +1858,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       false
@@ -1799,6 +1912,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       undefined,
+      undefined,
       context,
       false
     ); // This may return an uncommitted blob, or undefined for an nonexistent blob
@@ -1849,6 +1963,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       undefined,
+      undefined,
       context,
       false
     ); // This may return an uncommitted blob, or undefined for an nonexistent blob
@@ -1897,17 +2012,19 @@ export default class LokiBlobMetadataStore
     account: string,
     container: string,
     blob: string,
-    snapshot: string = ""
+    snapshot: string = "",
+    versionId: string = ""
   ): Promise<void> {
     await this.checkContainerExist(context, account, container);
 
-    const coll = this.db.getCollection(this.BLOBS_COLLECTION);
-    const doc = coll.findOne({
-      accountName: account,
-      containerName: container,
-      name: blob,
-      snapshot
-    });
+    const doc = this.findBlob(
+      context,
+      account,
+      container,
+      blob,
+      snapshot,
+      versionId
+    );
 
     if (!doc) {
       const requestId = context ? context.contextId : undefined;
@@ -1957,7 +2074,7 @@ export default class LokiBlobMetadataStore
    * @param {string} copySource
    * @param {(Models.BlobMetadata | undefined)} metadata
    * @param {(Models.AccessTier | undefined)} tier
-   * @param {Models.BlobStartCopyFromURLOptionalParams} [leaseAccessConditions]
+   * @param {Models.BlobStartCopyFromURLOptionalParams} [options]
    * @returns {Promise<Models.BlobProperties>}
    * @memberof LokiBlobMetadataStore
    */
@@ -1976,6 +2093,7 @@ export default class LokiBlobMetadataStore
       source.container,
       source.blob,
       source.snapshot,
+      source.versionId,
       context,
       true,
       true
@@ -2003,6 +2121,7 @@ export default class LokiBlobMetadataStore
       destination.container,
       destination.blob,
       undefined,
+      undefined,
       context,
       false
     );
@@ -2017,7 +2136,8 @@ export default class LokiBlobMetadataStore
     if (
       options.modifiedAccessConditions &&
       options.modifiedAccessConditions.ifNoneMatch === "*" &&
-      destBlob
+      destBlob &&
+      !this.isBlobVersioningEnabled()
     ) {
       throw StorageErrorFactory.getBlobAlreadyExists(context.contextId);
     }
@@ -2111,7 +2231,8 @@ export default class LokiBlobMetadataStore
       blobTags:
         options.blobTagsString === undefined
           ? undefined
-          : getTagsFromString(options.blobTagsString, context.contextId!)
+          : getTagsFromString(options.blobTagsString, context.contextId!),
+      versionId: ""
     };
 
     if (
@@ -2138,8 +2259,20 @@ export default class LokiBlobMetadataStore
     }
 
     if (destBlob) {
-      coll.remove(destBlob);
+      if (this.isBlobVersioningEnabled()) {
+        destBlob.isCurrentVersion = false;
+        coll.update(destBlob);
+      } else {
+        coll.remove(destBlob);
+      }
     }
+
+    if (this.isBlobVersioningEnabled()) {
+      copiedBlob.isCurrentVersion = true;
+      copiedBlob.versionId =
+        context.startTime?.toISOString() ?? new Date().toISOString();
+    }
+
     coll.insert(copiedBlob);
     return copiedBlob.properties;
   }
@@ -2153,7 +2286,7 @@ export default class LokiBlobMetadataStore
    * @param {string} copySource
    * @param {(Models.BlobMetadata | undefined)} metadata
    * @param {(Models.AccessTier | undefined)} tier
-   * @param {Models.BlobCopyFromURLOptionalParams} [leaseAccessConditions]
+   * @param {Models.BlobCopyFromURLOptionalParams} [options]
    * @returns {Promise<Models.BlobProperties>}
    * @memberof LokiBlobMetadataStore
    */
@@ -2172,6 +2305,7 @@ export default class LokiBlobMetadataStore
       source.container,
       source.blob,
       source.snapshot,
+      source.versionId,
       context,
       true,
       true
@@ -2197,6 +2331,7 @@ export default class LokiBlobMetadataStore
       destination.account,
       destination.container,
       destination.blob,
+      undefined,
       undefined,
       context,
       false
@@ -2331,8 +2466,20 @@ export default class LokiBlobMetadataStore
     }
 
     if (destBlob) {
-      coll.remove(destBlob);
+      if (this.isBlobVersioningEnabled()) {
+        destBlob.isCurrentVersion = false;
+        coll.update(destBlob);
+      } else {
+        coll.remove(destBlob);
+      }
     }
+
+    if (this.isBlobVersioningEnabled()) {
+      copiedBlob.isCurrentVersion = true;
+      copiedBlob.versionId =
+        context.startTime?.toISOString() ?? new Date().toISOString();
+    }
+
     coll.insert(copiedBlob);
     return copiedBlob.properties;
   }
@@ -2362,6 +2509,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       true,
@@ -2522,6 +2670,7 @@ export default class LokiBlobMetadataStore
       block.containerName,
       block.blobName,
       undefined,
+      undefined,
       context,
       false,
       true
@@ -2608,7 +2757,8 @@ export default class LokiBlobMetadataStore
       blob.accountName,
       blob.containerName,
       blob.name,
-      blob.snapshot,
+      undefined,
+      undefined,
       context,
       // XStore allows commit block list with empty block list to create a block blob without stage block call
       // In this case, there will no existing blob doc exists
@@ -2622,7 +2772,8 @@ export default class LokiBlobMetadataStore
       modifiedAccessConditions &&
       modifiedAccessConditions.ifNoneMatch === "*" &&
       doc &&
-      doc.isCommitted
+      doc.isCommitted &&
+      !this.isBlobVersioningEnabled()
     ) {
       throw StorageErrorFactory.getBlobAlreadyExists(context.contextId);
     }
@@ -2701,35 +2852,53 @@ export default class LokiBlobMetadataStore
       }
     }
 
+    // We always write to the normal blob, not the snapshots.
+    blob.snapshot = "";
+
     if (doc) {
-      // Commit block list
-      doc.properties.blobType = blob.properties.blobType;
-      doc.properties.lastModified = blob.properties.lastModified;
-      doc.committedBlocksInOrder = selectedBlockList;
-      doc.isCommitted = true;
-      doc.metadata = blob.metadata;
-      doc.properties.accessTier = blob.properties.accessTier;
-      doc.properties.accessTierInferred = blob.properties.accessTierInferred;
-      doc.properties.etag = blob.properties.etag;
-      doc.properties.cacheControl = blob.properties.cacheControl;
-      doc.properties.contentType = blob.properties.contentType;
-      doc.properties.contentMD5 = blob.properties.contentMD5;
-      doc.properties.contentEncoding = blob.properties.contentEncoding;
-      doc.properties.contentLanguage = blob.properties.contentLanguage;
-      doc.properties.contentDisposition = blob.properties.contentDisposition;
-      doc.blobTags = blob.blobTags;
-      doc.properties.contentLength = selectedBlockList
-        .map((block) => block.size)
-        .reduce((total, val) => {
-          return total + val;
-        }, 0);
+      if (this.isBlobVersioningEnabled()) {
+        doc.isCurrentVersion = false;
+        coll.update(doc);
 
-      // set lease state to available if it's expired
-      if (lease) {
-        new BlobWriteLeaseSyncer(doc).sync(lease);
+        blob.versionId =
+          context.startTime?.toISOString() ?? new Date().toISOString();
+        blob.committedBlocksInOrder = selectedBlockList;
+        blob.properties.contentLength = selectedBlockList
+          .map((block) => block.size)
+          .reduce((total, val) => {
+            return total + val;
+          }, 0);
+        coll.insert(blob);
+      } else {
+        // Commit block list
+        doc.properties.blobType = blob.properties.blobType;
+        doc.properties.lastModified = blob.properties.lastModified;
+        doc.committedBlocksInOrder = selectedBlockList;
+        doc.isCommitted = true;
+        doc.metadata = blob.metadata;
+        doc.properties.accessTier = blob.properties.accessTier;
+        doc.properties.accessTierInferred = blob.properties.accessTierInferred;
+        doc.properties.etag = blob.properties.etag;
+        doc.properties.cacheControl = blob.properties.cacheControl;
+        doc.properties.contentType = blob.properties.contentType;
+        doc.properties.contentMD5 = blob.properties.contentMD5;
+        doc.properties.contentEncoding = blob.properties.contentEncoding;
+        doc.properties.contentLanguage = blob.properties.contentLanguage;
+        doc.properties.contentDisposition = blob.properties.contentDisposition;
+        doc.blobTags = blob.blobTags;
+        doc.properties.contentLength = selectedBlockList
+          .map((block) => block.size)
+          .reduce((total, val) => {
+            return total + val;
+          }, 0);
+
+        // set lease state to available if it's expired
+        if (lease) {
+          new BlobWriteLeaseSyncer(doc).sync(lease);
+        }
+
+        coll.update(doc);
       }
-
-      coll.update(doc);
     } else {
       blob.committedBlocksInOrder = selectedBlockList;
       blob.properties.contentLength = selectedBlockList
@@ -2737,6 +2906,13 @@ export default class LokiBlobMetadataStore
         .reduce((total, val) => {
           return total + val;
         }, 0);
+
+      if (this.isBlobVersioningEnabled()) {
+        blob.isCurrentVersion = true;
+        blob.versionId =
+          context.startTime?.toISOString() ?? new Date().toISOString();
+      }
+
       coll.insert(blob);
     }
 
@@ -2769,6 +2945,7 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     isCommitted: boolean | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
     modifiedAccessConditions: Models.ModifiedAccessConditions | undefined
@@ -2782,6 +2959,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       snapshot,
+      versionId,
       context
     );
 
@@ -2860,6 +3038,7 @@ export default class LokiBlobMetadataStore
       blob.containerName,
       blob.name,
       blob.snapshot,
+      blob.versionId,
       context!,
       false,
       true
@@ -2929,6 +3108,7 @@ export default class LokiBlobMetadataStore
       blob.containerName,
       blob.name,
       blob.snapshot,
+      blob.versionId,
       context!,
       false,
       true
@@ -2993,6 +3173,9 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       snapshot,
+      // The REST API does not allow users to specify the version
+      // so we default to the "current" version.
+      undefined,
       context,
       false,
       true
@@ -3046,6 +3229,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       false,
@@ -3117,6 +3301,7 @@ export default class LokiBlobMetadataStore
       account,
       container,
       blob,
+      undefined,
       undefined,
       context,
       false,
@@ -3409,6 +3594,7 @@ export default class LokiBlobMetadataStore
    * @param {Context} context
    * @param {undefined} [forceExist]
    * @param {boolean} [forceCommitted] If true, will take uncommitted blob as a non-exist blob and throw exception.
+   * @param {string} [versionId] Version ID of the blob, used for versioned blob.
    * @returns {Promise<BlobModel>}
    * @memberof LokiBlobMetadataStore
    */
@@ -3417,6 +3603,7 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     context: Context,
     forceExist?: true,
     forceCommitted?: boolean
@@ -3433,6 +3620,7 @@ export default class LokiBlobMetadataStore
    * @param {(string | undefined)} snapshot
    * @param {Context} context
    * @param {false} forceExist
+   * @param {string} [versionId] Version ID of the blob, used for versioned blob.
    * @param {boolean} [forceCommitted] If true, will take uncommitted blob as a non-exist blob and return undefined.
    * @returns {(Promise<BlobModel | undefined>)}
    * @memberof LokiBlobMetadataStore
@@ -3442,10 +3630,10 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     context: Context,
     forceExist: false,
-    forceCommitted?: boolean,
-    versionId?: string
+    forceCommitted?: boolean
   ): Promise<BlobModel | undefined>;
 
   private async getBlobWithLeaseUpdated(
@@ -3453,29 +3641,20 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string = "",
+    versionId: string = "",
     context: Context,
     forceExist?: boolean,
-    forceCommitted?: boolean,
-    versionId?: string
+    forceCommitted?: boolean
   ): Promise<BlobModel | undefined> {
     await this.checkContainerExist(context, account, container);
-
-    const coll = this.db.getCollection(this.BLOBS_COLLECTION);
-
-    let blobDocFindChain = coll.chain().find({
-      accountName: account,
-      containerName: container,
-      name: blob,
-      snapshot
-    });
-
-    if (versionId) {
-      blobDocFindChain = blobDocFindChain.find({ versionId: versionId });
-    } else {
-      blobDocFindChain = blobDocFindChain.simplesort("versionId", true);
-    }
-
-    const doc = blobDocFindChain.data()[0];
+    const doc = this.findBlob(
+      context,
+      account,
+      container,
+      blob,
+      snapshot,
+      versionId
+    );
 
     if (forceExist === undefined || forceExist === true) {
       // Force exist if parameter forceExist is undefined or true
@@ -3536,7 +3715,6 @@ export default class LokiBlobMetadataStore
    * @param {(string | undefined)} snapshot
    * @param {(Models.LeaseAccessConditions | undefined)} leaseAccessConditions
    * @param {(Models.BlobTags | undefined)} tags
-   * @param {Models.ModifiedAccessConditions} [modifiedAccessConditions]
    * @returns {Promise<void>}
    * @memberof LokiBlobMetadataStore
    */
@@ -3546,9 +3724,9 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string | undefined,
+    versionId: string | undefined,
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
-    tags: Models.BlobTags | undefined,
-    modifiedAccessConditions?: Models.ModifiedAccessConditions
+    tags: Models.BlobTags | undefined
   ): Promise<void> {
     const coll = this.db.getCollection(this.BLOBS_COLLECTION);
     const doc = await this.getBlobWithLeaseUpdated(
@@ -3556,6 +3734,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       snapshot,
+      versionId,
       context,
       false,
       true
@@ -3591,6 +3770,7 @@ export default class LokiBlobMetadataStore
     container: string,
     blob: string,
     snapshot: string = "",
+    versionId: string = "",
     leaseAccessConditions: Models.LeaseAccessConditions | undefined,
     modifiedAccessConditions?: Models.ModifiedAccessConditions
   ): Promise<Models.BlobTags | undefined> {
@@ -3599,6 +3779,7 @@ export default class LokiBlobMetadataStore
       container,
       blob,
       snapshot,
+      versionId,
       context,
       false,
       true
@@ -3688,5 +3869,64 @@ export default class LokiBlobMetadataStore
     coll.update(doc);
 
     return doc.properties;
+  }
+
+  private findBlob(
+    context: Context,
+    account: string,
+    container: string,
+    blob: string,
+    snapshot: string = "",
+    versionId: string = ""
+  ): BlobModel | undefined {
+    const versionIdProvided = !isNullOrWhitespace(versionId);
+    const snapshotProvided = !isNullOrWhitespace(snapshot);
+
+    // Cannot specify both versionId and snapshot
+    if (versionIdProvided && snapshotProvided) {
+      throw StorageErrorFactory.getInvalidOperation(
+        context.contextId,
+        "Cannot specify both versionId and snapshot."
+      );
+    }
+
+    const coll = this.db.getCollection(this.BLOBS_COLLECTION);
+
+    let blobDocFindChain = coll.chain().find({
+      accountName: account,
+      containerName: container,
+      name: blob
+    });
+
+    if (versionIdProvided) {
+      // If versionId is provided, simply find and return that specific version
+      blobDocFindChain = blobDocFindChain.find({ versionId: versionId });
+      return blobDocFindChain.data()[0];
+    } else if (snapshotProvided) {
+      // If snapshot is provided, find that specific snapshot
+      blobDocFindChain = blobDocFindChain.find({ snapshot: snapshot });
+      return blobDocFindChain.data()[0];
+    } else if (this.isBlobVersioningEnabled()) {
+      // If versioning is enabled and no versionId/snapshot provided, return the current version
+      blobDocFindChain = blobDocFindChain.find({ isCurrentVersion: true });
+      return blobDocFindChain.data()[0];
+    } else {
+      // If versioning is disabled and no snapshot provided
+      // First try to find blob with versionId === ""
+      const emptyVersionBlob = blobDocFindChain
+        .find({ versionId: "", snapshot: "" })
+        .data()[0];
+      if (emptyVersionBlob) {
+        return emptyVersionBlob;
+      }
+
+      // If not found, return the current version
+      blobDocFindChain = blobDocFindChain
+        .find({
+          snapshot: ""
+        })
+        .find({ isCurrentVersion: true });
+      return blobDocFindChain.data()[0];
+    }
   }
 }
