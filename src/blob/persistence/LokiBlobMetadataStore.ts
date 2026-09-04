@@ -72,6 +72,7 @@ import IBlobMetadataStore, {
   StartCopyFromURLResponse
 } from "./IBlobMetadataStore";
 import PageWithDelimiter from "./PageWithDelimiter";
+import { decodePageMarker } from "./PageWithDelimiter";
 import FilterBlobPage from "./FilterBlobPage";
 import { generateQueryBlobWithTagsWhereFunction } from "./QueryInterpreter/QueryInterpreter";
 import {
@@ -1069,9 +1070,9 @@ export default class LokiBlobMetadataStore
       markerAsTuple = ["", ""];
     }
     else {
-      markerAsTuple = (marker ? marker.split(PageWithDelimiter.VERSIONING_MARKER) : ["", ""]) as [string, string];
+      markerAsTuple = decodePageMarker(marker);
 
-      if (markerAsTuple.length !== 2 || parseDateFromAssumedString(markerAsTuple[1]) === undefined) {
+      if (markerAsTuple[1] !== "" && parseDateFromAssumedString(markerAsTuple[1]) === undefined) {
         throw StorageErrorFactory.getInvalidQueryParameterValue(context.contextId);
       }
     }

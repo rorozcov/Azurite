@@ -1,6 +1,9 @@
 import * as assert from "assert";
 import { BlobPrefixModel } from "../../src/blob/persistence/IBlobMetadataStore";
-import PageWithDelimiter from "../../src/blob/persistence/PageWithDelimiter";
+import PageWithDelimiter, {
+  decodePageMarker,
+  encodePageMarker
+} from "../../src/blob/persistence/PageWithDelimiter";
 
 describe("PageWithDelimiter", () => {
   function checkResult(
@@ -45,13 +48,13 @@ describe("PageWithDelimiter", () => {
     it("fills 1 result properly @loki", async () => {
       const page = new PageWithDelimiter<string>(1);
       const [items, prefixes, marker] = await page.fill(createReader(blobs, 1), namer);
-      checkResult(items, prefixes, marker, 1, 0, "a" + PageWithDelimiter.VERSIONING_MARKER);
+      checkResult(items, prefixes, marker, 1, 0, encodePageMarker("a"));
     });
 
     it("fills n results properly @loki", async () => {
       const page = new PageWithDelimiter<string>(5);
       const [items, prefixes, marker] = await page.fill(createReader(blobs, 5), namer);
-      checkResult(items, prefixes, marker, 5, 0, "c/sub/1" + PageWithDelimiter.VERSIONING_MARKER);
+      checkResult(items, prefixes, marker, 5, 0, encodePageMarker("c/sub/1"));
     });
 
     it("fills exact count with no continuation @loki", async () => {
@@ -78,7 +81,7 @@ describe("PageWithDelimiter", () => {
         namer
       );
 
-      checkResult(items, prefixes, marker, 2, 0, "a");
+      checkResult(items, prefixes, marker, 2, 0, encodePageMarker("a"));
     });
   });
 
@@ -104,7 +107,7 @@ describe("PageWithDelimiter", () => {
         const blobs = ["a", "b"];
         const page = new PageWithDelimiter<string>(1, "/");
         let [items, prefixes, marker] = await page.fill(createReader(blobs, 1), namer);
-        checkResult(items, prefixes, marker, 1, 0, "a" + PageWithDelimiter.VERSIONING_MARKER);
+        checkResult(items, prefixes, marker, 1, 0, encodePageMarker("a"));
 
         // now cut off the end of the array and ensure no continuation is returned
         page.reset();
@@ -116,14 +119,14 @@ describe("PageWithDelimiter", () => {
         const blobs = ["a/1", "a/2", "a/3", "a/sub/1"];
         const page = new PageWithDelimiter<string>(1, "/", "a/");
         const [items, prefixes, marker] = await page.fill(createReader(blobs, 1), namer);
-        checkResult(items, prefixes, marker, 1, 0, "a/1" + PageWithDelimiter.VERSIONING_MARKER);
+        checkResult(items, prefixes, marker, 1, 0, encodePageMarker("a/1"));
       });
 
       it("returns first prefix when blobs exist @loki", async () => {
         const blobs = ["a/s0/1", "a/s0/2", "a/s0/3", "a/s1/1", "a/s2/2", "a/z"];
         const page = new PageWithDelimiter<string>(1, "/", "a/");
         const [items, prefixes, marker] = await page.fill(createReader(blobs, 1), namer);
-        checkResult(items, prefixes, marker, 0, 1, "a/s0/3" + PageWithDelimiter.VERSIONING_MARKER);
+        checkResult(items, prefixes, marker, 0, 1, encodePageMarker("a/s0/3"));
       });
     });
 
@@ -133,21 +136,21 @@ describe("PageWithDelimiter", () => {
         const blobs = ["a/s0/1", "a/s0/2", "a/s0/3", "a/s1/1", "a/s1/2", "a/s2/2", "a/z"];
         const page = new PageWithDelimiter<string>(2, "/", "a/");
         const [items, prefixes, marker] = await page.fill(createReader(blobs, 2), namer);
-        checkResult(items, prefixes, marker, 0, 2, "a/s1/2" + PageWithDelimiter.VERSIONING_MARKER);
+        checkResult(items, prefixes, marker, 0, 2, encodePageMarker("a/s1/2"));
       });
 
       it("squashes a mix @loki", async () => {
         const blobs = ["a/a", "a/s0/1", "a/s0/2", "a/s1/1", "a/s1/2", "a/z"];
         const page = new PageWithDelimiter<string>(2, "/", "a/");
         const [items, prefixes, marker] = await page.fill(createReader(blobs, 2), namer);
-        checkResult(items, prefixes, marker, 1, 1, "a/s0/2" + PageWithDelimiter.VERSIONING_MARKER);
+        checkResult(items, prefixes, marker, 1, 1, encodePageMarker("a/s0/2"));
       });
 
       it("follows squashed pages @loki", async () => {
         const blobs = ["a/a", "a/s0/1", "a/s0/2", "a/s1/1", "a/s1/2", "a/z"];
         const page = new PageWithDelimiter<string>(2, "/", "a/");
         let [items, prefixes, marker] = await page.fill(createReader(blobs, 2), namer);
-        checkResult(items, prefixes, marker, 1, 1, "a/s0/2" + PageWithDelimiter.VERSIONING_MARKER);
+        checkResult(items, prefixes, marker, 1, 1, encodePageMarker("a/s0/2"));
 
         // now cut off the end of the array and ensure no continuation is returned
         page.reset();
@@ -218,7 +221,7 @@ describe("PageWithDelimiter", () => {
       const [items, prefixes, marker] = await page.fill(createVersionedReader(blobs, 2), versioningNamer);
       
       checkVersionedResult(items, prefixes, marker, 2, 0, 
-        "blob1" + PageWithDelimiter.VERSIONING_MARKER + "2023-01-01T11:00:00.000Z");
+        encodePageMarker("blob1", "2023-01-01T11:00:00.000Z"));
     });
 
     it("handles blobs with snapshots @loki", async () => {
@@ -232,7 +235,7 @@ describe("PageWithDelimiter", () => {
       const [items, prefixes, marker] = await page.fill(createVersionedReader(blobs, 2), versioningNamer);
       
       checkVersionedResult(items, prefixes, marker, 2, 0, 
-        "blob1" + PageWithDelimiter.VERSIONING_MARKER + "2023-01-01T10:30:00.0000000Z");
+        encodePageMarker("blob1", "2023-01-01T10:30:00.0000000Z"));
     });
 
     it("handles mixed versioning types with same name @loki", async () => {
@@ -247,7 +250,7 @@ describe("PageWithDelimiter", () => {
       const [items, prefixes, marker] = await page.fill(createVersionedReader(blobs, 3), versioningNamer);
       
       checkVersionedResult(items, prefixes, marker, 3, 0, 
-        "blob1" + PageWithDelimiter.VERSIONING_MARKER + "2023-01-01T12:00:00.0000000Z");
+        encodePageMarker("blob1", "2023-01-01T12:00:00.0000000Z"));
     });
 
     it("handles different blob names with versions @loki", async () => {
@@ -276,7 +279,7 @@ describe("PageWithDelimiter", () => {
       let [items, prefixes, marker] = await page.fill(createVersionedReader(blobs, 2), versioningNamer);
       
       checkVersionedResult(items, prefixes, marker, 2, 0, 
-        "blob1" + PageWithDelimiter.VERSIONING_MARKER + "2023-01-01T11:00:00.000Z");
+        encodePageMarker("blob1", "2023-01-01T11:00:00.000Z"));
 
       // Second page
       page.reset();
@@ -297,7 +300,49 @@ describe("PageWithDelimiter", () => {
       const [items, prefixes, marker] = await page.fill(createVersionedReader(blobs, 2), versioningNamer);
       
       checkVersionedResult(items, prefixes, marker, 2, 0, 
-        "folder/blob1" + PageWithDelimiter.VERSIONING_MARKER + "2023-01-01T11:00:00.000Z");
+        encodePageMarker("folder/blob1", "2023-01-01T11:00:00.000Z"));
+    });
+  });
+
+  describe("marker encoding", () => {
+    it("round trips a name only marker @loki", () => {
+      const marker = encodePageMarker("blob1");
+      assert.notEqual(marker, "blob1");
+      assert.deepStrictEqual(decodePageMarker(marker), ["blob1", ""]);
+    });
+
+    it("round trips a name and version marker @loki", () => {
+      const marker = encodePageMarker("blob1", "2023-01-01T11:00:00.000Z");
+      assert.notEqual(marker, "blob1");
+      assert.deepStrictEqual(decodePageMarker(marker), [
+        "blob1",
+        "2023-01-01T11:00:00.000Z"
+      ]);
+    });
+
+    it("treats an empty or missing marker as no marker @loki", () => {
+      assert.deepStrictEqual(decodePageMarker(""), ["", ""]);
+      assert.deepStrictEqual(decodePageMarker(undefined), ["", ""]);
+    });
+
+    it("treats unrecognized markers as legacy plain blob names @loki", () => {
+      assert.deepStrictEqual(decodePageMarker("blob1"), ["blob1", ""]);
+      assert.deepStrictEqual(decodePageMarker("folder/blob1"), [
+        "folder/blob1",
+        ""
+      ]);
+
+      // valid base64, but not an encoded marker
+      const notAMarker = Buffer.from(JSON.stringify([1, 2]), "utf8").toString(
+        "base64"
+      );
+      assert.deepStrictEqual(decodePageMarker(notAMarker), [notAMarker, ""]);
+
+      const badShape = Buffer.from(
+        JSON.stringify({ name: 1, version: "x" }),
+        "utf8"
+      ).toString("base64");
+      assert.deepStrictEqual(decodePageMarker(badShape), [badShape, ""]);
     });
   });
 });

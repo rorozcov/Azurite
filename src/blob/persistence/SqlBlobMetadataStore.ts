@@ -74,6 +74,7 @@ import IBlobMetadataStore, {
   SetContainerAccessPolicyOptions
 } from "./IBlobMetadataStore";
 import PageWithDelimiter from "./PageWithDelimiter";
+import { decodePageMarker } from "./PageWithDelimiter";
 import FilterBlobPage from "./FilterBlobPage";
 import { getBlobTagsCount, getTagsFromString, toBlobTags } from "../utils/utils";
 import { generateQueryBlobWithTagsWhereFunction } from "./QueryInterpreter/QueryInterpreter";
@@ -1349,11 +1350,12 @@ export default class SqlBlobMetadataStore implements IBlobMetadataStore {
         }
 
         if (marker !== undefined) {
+          const [markerName] = decodePageMarker(marker);
           if (whereQuery.blobName !== undefined) {
-            whereQuery.blobName[Op.gt] = marker;
+            whereQuery.blobName[Op.gt] = markerName;
           } else {
             whereQuery.blobName = {
-              [Op.gt]: marker
+              [Op.gt]: markerName
             };
           }
         }

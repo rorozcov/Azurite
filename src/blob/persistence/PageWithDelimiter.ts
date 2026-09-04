@@ -3,6 +3,50 @@ import { BlobPrefixModel } from "./IBlobMetadataStore";
 export type PageMarkerMode = "name" | "nameAndTimestamp";
 
 /**
+ * Encode a list blobs continuation token.
+ *
+ * Continuation tokens are opaque to clients, they only need to round trip
+ * through {@link decodePageMarker}.
+ */
+export function encodePageMarker(name: string, version?: string): string {
+  const payload: { name: string; version?: string } =
+    version === undefined || version === "" ? { name } : { name, version };
+
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+}
+
+/**
+ * Decode a list blobs continuation token into its [name, version] parts.
+ *
+ * Anything which is not a token produced by {@link encodePageMarker} is
+ * treated as a legacy plain blob name, so tokens issued by older versions of
+ * Azurite (and callers passing a bare blob name) keep working.
+ */
+export function decodePageMarker(marker?: string): [string, string] {
+  if (marker === undefined || marker === "") {
+    return ["", ""];
+  }
+
+  try {
+    const decoded = Buffer.from(marker, "base64").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      typeof parsed.name === "string" &&
+      (parsed.version === undefined || typeof parsed.version === "string")
+    ) {
+      return [parsed.name, parsed.version === undefined ? "" : parsed.version];
+    }
+  } catch {
+    // Fall through, the marker is not an encoded marker.
+  }
+
+  return [marker, ""];
+}
+
+/**
  * This implements a page of blob results taking delimiters into account.
  *
  * When a delimiter is passed to list blobs, items must be squashed into BlobPrefix items.
@@ -13,8 +57,6 @@ export type PageMarkerMode = "name" | "nameAndTimestamp";
  * @class PageWithDelimiter
  */
 export default class PageWithDelimiter<BlobType> {
-  public static readonly VERSIONING_MARKER = "__version_marker__";
-
   /**
    * Compare two markers and return true if the first marker is later (greater) than the second
    * @param marker1 First marker [name, timestamp]
@@ -25,6 +67,11 @@ export default class PageWithDelimiter<BlobType> {
     if (marker1[0] > marker2[0]) {
       return true; // First marker has greater name
     } else if (marker1[0] === marker2[0]) {
+      // An empty timestamp on the second marker means every item with that
+      // name has already been returned.
+      if (marker2[1] === "") {
+        return false;
+      }
       return marker1[1] > marker2[1]; // Same name, compare timestamps
     } else {
       return false; // First marker has lesser name
@@ -220,9 +267,10 @@ export default class PageWithDelimiter<BlobType> {
       this.blobItems,
       this.prefixes(),
       added < docs.length
-        ? this.markerMode === "name"
-          ? this.latestMarker[0]
-          : this.latestMarker.join(PageWithDelimiter.VERSIONING_MARKER)
+        ? encodePageMarker(
+            this.latestMarker[0],
+            this.markerMode === "name" ? undefined : this.latestMarker[1]
+          )
         : ""
     ];
   }
